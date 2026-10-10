@@ -1,0 +1,200 @@
+module spi_baud_generator(
+    input       PCLK,
+    input       PRESET_n,
+
+    input [1:0] spi_mode_i,
+    input       spiswai_i,
+
+    input [2:0] sppr_i,
+    input [2:0] spr_i,
+
+    input       cpol_i,
+    input       cpha_i,
+    input       ss_i,
+
+    output reg  sclk_o,
+
+    output reg  miso_receive_sclk_o,
+    output reg  miso_receive_sclk0_o,
+
+    output reg  mosi_send_sclk_o,
+    output reg  mosi_send_sclk0_o,
+
+    output [11:0] BaudRateDivisor
+);
+
+    //==========================================================
+    // Internal signals
+    //==========================================================
+
+    reg [11:0] count_s;
+
+    wire pre_sclk_s;
+
+    //==========================================================
+    // Baud Rate Divisor
+    //
+    // Desired:
+    //
+    // SPPR = 000, SPR = 000 -> 1
+    // SPPR = 000, SPR = 001 -> 2
+    // SPPR = 000, SPR = 010 -> 4
+    //
+    // Therefore:
+    // BaudRateDivisor = (SPPR + 1) * 2^SPR
+    //==========================================================
+
+    assign BaudRateDivisor =
+                    (sppr_i + 1'b1) * (2 ** spr_i);
+
+
+    //==========================================================
+    // Initial SCLK level according to CPOL
+    //==========================================================
+
+    assign pre_sclk_s = cpol_i ? 1'b1 : 1'b0;
+
+
+    //==========================================================
+    // SCLK GENERATION
+    //==========================================================
+
+    always @(posedge PCLK or negedge PRESET_n)
+    begin
+        if(!PRESET_n)
+        begin
+            count_s <= 12'd0;
+            sclk_o  <= pre_sclk_s;
+        end
+
+        else if((~ss_i) &&
+                ((spi_mode_i == 2'b00) ||
+                 ((spi_mode_i == 2'b01) && (~spiswai_i))))
+        begin
+
+            // Toggle SCLK after half baud divisor
+            if(count_s == ((BaudRateDivisor >> 1) - 1'b1))
+            begin
+                count_s <= 12'd0;
+                sclk_o  <= ~sclk_o;
+            end
+
+            else
+            begin
+                count_s <= count_s + 1'b1;
+            end
+        end
+
+        else
+        begin
+            count_s <= 12'd0;
+            sclk_o  <= pre_sclk_s;
+        end
+    end
+
+
+    //==========================================================
+    // MISO RECEIVE FLAGS
+    //
+    // The flag is generated ONE PCLK BEFORE the SCLK edge.
+    //
+    // For example:
+    //
+    // count = half_divisor - 2
+    //             |
+    //             |---- FLAG HIGH
+    //             |
+    // next PCLK -> SCLK EDGE
+    //
+    //==========================================================
+
+    always @(posedge PCLK or negedge PRESET_n)
+    begin
+        if(!PRESET_n)
+        begin
+            miso_receive_sclk_o  <= 1'b0;
+            miso_receive_sclk0_o <= 1'b0;
+        end
+
+        else
+        begin
+            // Default: flags are pulses
+            miso_receive_sclk_o  <= 1'b0;
+            miso_receive_sclk0_o <= 1'b0;
+
+            // -----------------------------------------------
+            // Falling-edge sampling
+            // -----------------------------------------------
+            if((!cpha_i && cpol_i) ||
+               (cpha_i && !cpol_i))
+            begin
+                if(sclk_o &&
+                   (count_s == ((BaudRateDivisor >> 1) - 2)))
+                begin
+                    miso_receive_sclk0_o <= 1'b1;
+                end
+            end
+
+            // -----------------------------------------------
+            // Rising-edge sampling
+            // -----------------------------------------------
+            else
+            begin
+                if((!sclk_o) &&
+                   (count_s == ((BaudRateDivisor >> 1) - 2)))
+                begin
+                    miso_receive_sclk_o <= 1'b1;
+                end
+            end
+        end
+    end
+
+
+    //==========================================================
+    // MOSI SEND FLAGS
+    //
+    // The flag is generated ONE PCLK BEFORE the SCLK edge.
+    //==========================================================
+
+    always @(posedge PCLK or negedge PRESET_n)
+    begin
+        if(!PRESET_n)
+        begin
+            mosi_send_sclk_o  <= 1'b0;
+            mosi_send_sclk0_o <= 1'b0;
+        end
+
+        else
+        begin
+            // Default: flags are pulses
+            mosi_send_sclk_o  <= 1'b0;
+            mosi_send_sclk0_o <= 1'b0;
+
+            // -----------------------------------------------
+            // Falling-edge transmission
+            // -----------------------------------------------
+            if((!cpha_i && cpol_i) ||
+               (cpha_i && !cpol_i))
+            begin
+                if(sclk_o &&
+                   (count_s == ((BaudRateDivisor >> 1) - 2)))
+                begin
+                    mosi_send_sclk0_o <= 1'b1;
+                end
+            end
+
+            // -----------------------------------------------
+            // Rising-edge transmission
+            // -----------------------------------------------
+            else
+            begin
+                if((!sclk_o) &&
+                   (count_s == ((BaudRateDivisor >> 1) - 2)))
+                begin
+                    mosi_send_sclk_o <= 1'b1;
+                end
+            end
+        end
+    end
+
+endmodule

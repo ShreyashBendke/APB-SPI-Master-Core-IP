@@ -1,0 +1,6 @@
+work/
+*.wlf
+transcript
+*.log
+node_modules/
+.DS_Store
